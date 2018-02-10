@@ -130,7 +130,7 @@ func makeTheLightsBlinkTheRainbow(request *gorequest.SuperAgent, csrfToken strin
 		}
 	}
 
-	//updateThingSpeak(request, requestCounter)
+	updateThingSpeak(request, requestCounter)
 }
 
 // updateThingSpeak is responsible for updating our ThingSpeak graph so that
