@@ -19,6 +19,12 @@ var requestCounter int
 // that is used to make API requests to ThingSpeak.
 var thingspeakURL string
 
+// rateLimit is a global variable that we use to store the number of
+// requests we are allowed to make.
+// It is topped every 65 seconds (to allow for time variance on the host)
+// with another 20 requests.
+var rateLimit int
+
 func main() {
 	loadEnv()
 
@@ -26,6 +32,11 @@ func main() {
 
 	// So the graph starts from 0
 	updateThingSpeak(request, 0)
+
+	// Set the initial request bucket to 20
+	rateLimit = 20
+
+	go topUpLimiter()
 
 	for {
 		csrfToken, csrfTokenFound := getCSRFToken(request)
@@ -87,9 +98,6 @@ func getCSRFToken(request *gorequest.SuperAgent) (string, bool) {
 // It does this only 7 times, so that we can fetch a new CSRF token.
 // This is done to prevent cases where the CSRF token may expire on us.
 //
-// It also includes an 8 second wait after each iteration of the 7 calls
-// to help keep the calls under the rate limit of 50 requests per minute.
-//
 // If we do hit the rate limit for any reason, the requests will pause for
 // a minute before continuing.
 func makeTheLightsBlinkTheRainbow(request *gorequest.SuperAgent, csrfToken string) {
@@ -99,26 +107,30 @@ func makeTheLightsBlinkTheRainbow(request *gorequest.SuperAgent, csrfToken strin
 
 		for _, colour := range colours {
 
-			response, _, _ := request.Post("http://blink.mattstauffer.com/flash").
-				Set("X-CSRF-TOKEN", csrfToken).
-				Send(fmt.Sprintf(`{"color":"%v"}`, colour)).
-				End()
+			if rateLimit > 0 {
 
-			if response.StatusCode == 429 {
-				// We've hit the rate limit, let's cool off before we blow the bulb ;)
-				time.Sleep(60 * time.Second)
+				response, _, _ := request.Post("http://blink.mattstauffer.com/flash").
+					Set("X-CSRF-TOKEN", csrfToken).
+					Send(fmt.Sprintf(`{"color":"%v"}`, colour)).
+					End()
+
+				requestCounter++
+				rateLimit--
+
+				if response.StatusCode == 429 {
+					// We've hit the rate limit, let's cool off before we blow the bulb ;)
+					fmt.Println("Whoops we hit the rate limit - let's cool off for a bit")
+
+					time.Sleep(60 * time.Second)
+				}
+			} else {
+				time.Sleep(1 * time.Second)
 			}
 
 		}
-
-		requestCounter += 7
-
-		// Used to prevent us hitting the rate limit of 50 requests a minute
-		time.Sleep(8 * time.Second)
-
 	}
 
-	updateThingSpeak(request, requestCounter)
+	//updateThingSpeak(request, requestCounter)
 }
 
 // updateThingSpeak is responsible for updating our ThingSpeak graph so that
@@ -127,4 +139,13 @@ func makeTheLightsBlinkTheRainbow(request *gorequest.SuperAgent, csrfToken strin
 // the magnitude of blinks we're responsible for after this has run for a while :).
 func updateThingSpeak(request *gorequest.SuperAgent, blinks int) {
 	request.Get(fmt.Sprintf("%v%v", thingspeakURL, blinks)).End()
+}
+
+// topUpLimiter is responsible for topping up our rateLimit global variable.
+// The app we are hitting allows 20 requests per minute - so we should respect
+// that and make the most of it.
+func topUpLimiter() {
+	for range time.Tick(65 * time.Second) {
+		rateLimit += 20
+	}
 }
