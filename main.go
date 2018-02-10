@@ -113,12 +113,12 @@ func makeTheLightsBlinkTheRainbow(request *gorequest.SuperAgent, csrfToken strin
 
 		requestCounter += 7
 
-		updateThingSpeak(request, requestCounter)
-
 		// Used to prevent us hitting the rate limit of 50 requests a minute
 		time.Sleep(8 * time.Second)
 
 	}
+
+	updateThingSpeak(request, requestCounter)
 }
 
 // updateThingSpeak is responsible for updating our ThingSpeak graph so that
