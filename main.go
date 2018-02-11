@@ -145,7 +145,7 @@ func updateThingSpeak(request *gorequest.SuperAgent, blinks int) {
 // The app we are hitting allows 20 requests per minute - so we should respect
 // that and make the most of it.
 func topUpLimiter() {
-	for range time.Tick(65 * time.Second) {
+	for range time.Tick(61 * time.Second) {
 		rateLimit += 20
 	}
 }
