@@ -1,5 +1,4 @@
 // Copyright 2018 James Bannister. All rights reserved.
-
 /*
 	This is an example of how to scrape and use a CSRF token in a
 	rate limited application.
@@ -64,7 +63,7 @@ func main() {
 	throttle := time.Tick(rate)
 
 	for {
-		<-throttle  // rate limit our API calls
+		<-throttle // rate limit our API calls
 		go makeTheLightsBlinkTheRainbow(request, csrfToken)
 	}
 }
@@ -116,7 +115,7 @@ func setCSRFToken(request *gorequest.SuperAgent) {
 // a minute before continuing.
 func makeTheLightsBlinkTheRainbow(request *gorequest.SuperAgent, csrfToken string) {
 
-	if requestCounter % 49 == 0 {
+	if requestCounter%49 == 0 {
 		//get new CSRF token
 		fmt.Println("Setting new CSRF token.")
 		setCSRFToken(request)
@@ -137,7 +136,7 @@ func makeTheLightsBlinkTheRainbow(request *gorequest.SuperAgent, csrfToken strin
 		fmt.Println("Whoops we got a 500 error - we probably have an invalid CSRF token!")
 	}
 
-	if requestCounter % 7 == 0 {
+	if requestCounter%7 == 0 {
 		updateThingSpeak(request, requestCounter)
 	}
 }
