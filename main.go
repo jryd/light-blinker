@@ -1,3 +1,12 @@
+// Copyright 2018 James Bannister. All rights reserved.
+
+/*
+	This is an example of how to scrape and use a CSRF token in a
+	rate limited application.
+
+	The rate limiting is done based on a time ticker which fires
+	the function to make our HTTP call.
+*/
 package main
 
 import (
