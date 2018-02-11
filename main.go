@@ -25,39 +25,91 @@ var thingspeakURL string
 // with another 20 requests.
 var rateLimit int
 
-// colours is a global variable that stores a slice of colours we want to
-// request. Currently stores the closest we can get to a rainbow.
 var colours = [7]string{"red", "orange", "yellow", "green", "blue", "purple", "pink"}
 
-// nextColour is a global variable that stores an integer representing the
-// next index of the colours slice we want.
 var nextColour int
 
-// csrfToken is a global variable storing the current CSRF token we need
-// to use in our requests.
 var csrfToken string
 
 func main() {
 	loadEnv()
 
-	request := gorequest.New().SetDebug(false)
+	request := customGorequest().SetDebug(false)
+
+	request
 
 	// So the graph starts from 0
 	updateThingSpeak(request, 0)
 
-	// Initially set our CSRF token
-	setCSRFToken(request)
+	rate := (60 * time.Second) / 20
 
-	// Set the rate at which calls should be made - time span / requests per time span
-	rate := (61 * time.Second) / 20
-
-	// Create the throttle ticker using the rate above
 	throttle := time.Tick(rate)
 
 	for {
 		<-throttle  // rate limit our API calls
 		go makeTheLightsBlinkTheRainbow(request, csrfToken)
 	}
+
+	for {
+		csrfToken, csrfTokenFound := getCSRFToken(request)
+
+		if csrfTokenFound {
+			makeTheLightsBlinkTheRainbow(request, csrfToken)
+		} else {
+			updateThingSpeak(request, 0)
+		}
+	}
+}
+
+func customGorequest() *SuperAgent {
+	cookiejarOptions := cookiejar.Options{
+		PublicSuffixList: publicsuffix.List,
+	}
+	jar, _ := cookiejar.New(&cookiejarOptions)
+
+	debug := os.Getenv("GOREQUEST_DEBUG") == "1"
+
+	s := &SuperAgent{
+		TargetType:        TypeJSON,
+		Data:              make(map[string]interface{}),
+		Header:            http.Header{},
+		RawString:         "",
+		SliceData:         []interface{}{},
+		FormData:          url.Values{},
+		QueryData:         url.Values{},
+		FileData:          make([]File, 0),
+		BounceToRawString: false,
+		Client:            &http.Client{Jar: jar},
+		Transport:         newRateLimitTransport(20, http.DefaultTransport),
+		Cookies:           make([]*http.Cookie, 0),
+		Errors:            nil,
+		BasicAuth:         struct{ Username, Password string }{},
+		Debug:             debug,
+		CurlCommand:       false,
+		logger:            log.New(os.Stderr, "[gorequest]", log.LstdFlags),
+	}
+	// disable keep alives by default, see this issue https://github.com/parnurzeal/gorequest/issues/75
+	s.Transport.DisableKeepAlives = true
+	return s
+}
+
+type rateLimitTransport struct {
+    limiter *rate.Limiter
+    xport   http.RoundTripper
+}
+
+var _ http.RoundTripper = &rateLimitTransport{}
+
+func newRateLimitTransport(r float64, xport http.RoundTripper) http.RoundTripper {
+    return &rateLimitTransport{
+        limiter: rate.NewLimiter(rate.Limit(r), 1),
+        xport:   xport,
+    }
+}
+
+func (t *rateLimitTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+    t.limiter.Wait(r.Context())
+    return t.xport.RoundTrip(r)
 }
 
 // loadEnv loads our .env file and sets up any global variables
@@ -81,7 +133,7 @@ func loadEnv() {
 // page for the CSRF token.
 //
 // This is then used to make subsequent calls to blink the lights.
-func setCSRFToken(request *gorequest.SuperAgent) {
+func getCSRFToken(request *gorequest.SuperAgent) (string, bool) {
 	res, _, _ := request.Get("http://blink.mattstauffer.com/").End()
 
 	doc, err := goquery.NewDocumentFromResponse(res)
@@ -90,11 +142,17 @@ func setCSRFToken(request *gorequest.SuperAgent) {
 		log.Fatal(err)
 	}
 
+	csrfToken := ""
+	csrfTokenFound := false
+
 	doc.Find("meta").Each(func(index int, item *goquery.Selection) {
 		if item.AttrOr("name", "") == "csrf-token" {
 			csrfToken = item.AttrOr("content", "")
+			csrfTokenFound = true
 		}
 	})
+
+	return csrfToken, csrfTokenFound
 }
 
 // makeTheLightsBlinkTheRainbow fires 7 POST requests; one for each colour
@@ -106,47 +164,35 @@ func setCSRFToken(request *gorequest.SuperAgent) {
 // If we do hit the rate limit for any reason, the requests will pause for
 // a minute before continuing.
 func makeTheLightsBlinkTheRainbow(request *gorequest.SuperAgent, csrfToken string) {
+	for i := 0; i <= 7; i++ {
 
-	if requestCounter % 49 == 0 {
-		//get new CSRF token
-		fmt.Println("Setting new CSRF token.")
-		setCSRFToken(request)
+
+		for _, colour := range colours {
+
+			if rateLimit > 0 {
+
+				response, _, _ := request.Post("http://blink.mattstauffer.com/flash").
+					Set("X-CSRF-TOKEN", csrfToken).
+					Send(fmt.Sprintf(`{"color":"%v"}`, colour)).
+					End()
+
+				requestCounter++
+				rateLimit--
+
+				if response.StatusCode == 429 {
+					// We've hit the rate limit, let's cool off before we blow the bulb ;)
+					fmt.Println("Whoops we hit the rate limit - let's cool off for a bit")
+
+					time.Sleep(60 * time.Second)
+				}
+			} else {
+				time.Sleep(1 * time.Second)
+			}
+
+		}
 	}
 
-	response, _, _ := request.Post("http://blink.mattstauffer.com/flash").
-		Set("X-CSRF-TOKEN", csrfToken).
-		Send(fmt.Sprintf(`{"color":"%v"}`, colours[getNextColour()])).
-		End()
-
-	requestCounter++
-
-	if response.StatusCode == 429 {
-		fmt.Println("Whoops we hit the rate limit - let's cool off for a bit")
-
-		time.Sleep(60 * time.Second)
-	} else if response.StatusCode == 500 {
-		fmt.Println("Whoops we got a 500 error - we probably have an invalid CSRF token!")
-	}
-
-	if requestCounter % 7 == 0 {
-		updateThingSpeak(request, requestCounter)
-	}
-}
-
-// getNextColour is responsible for returning the index value of the next
-// colour we need to send.
-// It then updates the nextColour reference to the next index value to be
-// used.
-func getNextColour() int {
-	colourForThisIteration := nextColour
-
-	if nextColour == 6 {
-		nextColour = 0
-	} else {
-		nextColour++
-	}
-
-	return colourForThisIteration
+	updateThingSpeak(request, requestCounter)
 }
 
 // updateThingSpeak is responsible for updating our ThingSpeak graph so that
@@ -155,4 +201,13 @@ func getNextColour() int {
 // the magnitude of blinks we're responsible for after this has run for a while :).
 func updateThingSpeak(request *gorequest.SuperAgent, blinks int) {
 	request.Get(fmt.Sprintf("%v%v", thingspeakURL, blinks)).End()
+}
+
+// topUpLimiter is responsible for topping up our rateLimit global variable.
+// The app we are hitting allows 20 requests per minute - so we should respect
+// that and make the most of it.
+func topUpLimiter() {
+	for range time.Tick(61 * time.Second) {
+		rateLimit += 20
+	}
 }
